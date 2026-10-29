@@ -1,0 +1,124 @@
+@page "/"
+@using System.Net
+@using System.Text.Json
+@using System.Text.RegularExpressions
+@using BlazorWasmBrasilApiCep.Models
+@inject HttpClient Http
+
+<PageTitle>Consulta CEP | BrasilAPI</PageTitle>
+<header>
+    <p class="eyebrow">BRASILAPI · CONSULTA DE ENDEREÇOS</p>
+    <h1>Seu endereço,<br />a um CEP de distância.</h1>
+    <p class="intro">Encontre logradouro, bairro e cidade com uma consulta à BrasilAPI.</p>
+</header>
+<section class="panel" aria-label="Consulta de CEP">
+    <form @onsubmit="SearchAsync" @onsubmit:preventDefault>
+        <label for="cep">Digite o CEP</label>
+        <div class="search-row">
+            <input id="cep" @bind="cepInput" placeholder="30130-000" inputmode="numeric" maxlength="9" autocomplete="postal-code" disabled="@loading" aria-describedby="cep-help" />
+            <button type="submit" disabled="@loading">@(loading ? "Consultando…" : "Consultar CEP →")</button>
+        </div>
+        <small id="cep-help">Informe 8 dígitos, com ou sem hífen. Exemplo: 30130-000.</small>
+    </form>
+</section>
+<div aria-live="polite" aria-atomic="true">
+    @if (loading)
+    {
+        <p class="notice" role="status">Buscando o endereço na BrasilAPI…</p>
+    }
+    else if (error is not null)
+    {
+        <p class="notice error" role="alert">@error</p>
+    }
+</div>
+@if (address is not null)
+{
+    <section class="result" aria-label="Endereço encontrado">
+        <p class="eyebrow">ENDEREÇO ENCONTRADO</p>
+        <h2>@Display(address.Street)</h2>
+        <p class="location">@address.City · @address.State</p>
+        <dl>
+            <div><dt>CEP</dt><dd>@FormatCep(address.Cep)</dd></div>
+            <div><dt>Bairro</dt><dd>@Display(address.Neighborhood)</dd></div>
+            <div><dt>Cidade</dt><dd>@Display(address.City)</dd></div>
+            <div><dt>Estado</dt><dd>@Display(address.State)</dd></div>
+            <div><dt>Serviço de consulta</dt><dd>@Display(address.Service)</dd></div>
+        </dl>
+        <div class="ibge">
+            <h3>Dados do IBGE</h3>
+            @if (address.Ibge is not null)
+            {
+                <dl>
+                    <div><dt>Código da cidade</dt><dd>@Display(address.Ibge.City)</dd></div>
+                    <div><dt>Código do estado</dt><dd>@Display(address.Ibge.State)</dd></div>
+                </dl>
+            }
+            else
+            {
+                <p>Dados do IBGE não informados pela API para este CEP.</p>
+            }
+        </div>
+    </section>
+}
+else if (!loading && error is null)
+{
+    <p class="empty">Comece pelo CEP que deseja consultar.</p>
+}
+<footer>Dados fornecidos pela <a href="https://brasilapi.com.br/docs#tag/CEP" target="_blank" rel="noopener noreferrer">BrasilAPI</a>.</footer>
+
+@code {
+    private string cepInput = "30130-000";
+    private CepResponse? address;
+    private bool loading;
+    private string? error;
+
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "Não informado pela API" : value;
+    private static string FormatCep(string value) => value.Length == 8 ? $"{value[..5]}-{value[5..]}" : value;
+
+    private async Task SearchAsync()
+    {
+        if (loading) return;
+        address = null;
+        error = null;
+        var input = cepInput.Trim();
+        if (!Regex.IsMatch(input, @"^[0-9]{5}-?[0-9]{3}$"))
+        {
+            error = "Informe um CEP com 8 dígitos, com ou sem hífen.";
+            return;
+        }
+
+        var cep = input.Replace("-", "");
+        loading = true;
+        try
+        {
+            using var response = await Http.GetAsync($"cep/v1/{cep}");
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                error = "CEP não encontrado. Confira os números e tente novamente.";
+                return;
+            }
+            response.EnsureSuccessStatusCode();
+            var result = await response.Content.ReadFromJsonAsync<CepResponse>();
+            if (result is null || string.IsNullOrWhiteSpace(result.Cep) || string.IsNullOrWhiteSpace(result.City))
+                error = "A BrasilAPI retornou dados incompletos. Tente novamente.";
+            else
+                address = result;
+        }
+        catch (HttpRequestException)
+        {
+            error = "Não foi possível consultar a BrasilAPI. Verifique sua conexão e tente novamente.";
+        }
+        catch (OperationCanceledException)
+        {
+            error = "A consulta demorou demais. Tente novamente.";
+        }
+        catch (JsonException)
+        {
+            error = "A resposta da BrasilAPI não pôde ser interpretada. Tente novamente mais tarde.";
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+}
